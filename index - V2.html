@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Controle Financeiro Dra. Eulália (Salvo Localmente)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary-blue': '#0056b3',
+                        'secondary-green': '#28a745',
+                        'bg-light': '#f4f4f9',
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'Arial', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Estilo para garantir que o corpo ocupe toda a altura */
+        body {
+            font-family: 'Inter', sans-serif;
+            min-height: 100vh;
+        }
+        /* Estilos de transição para botões */
+        button {
+            transition: all 0.2s ease-in-out;
+        }
+        
+        /* Otimização da tabela para mobile: Reduz tamanho da fonte e padding */
+        @media (max-width: 768px) {
+            .data-table th, .data-table td {
+                font-size: 11px; /* Fonte menor */
+                padding: 6px 4px; /* Padding reduzido */
+                white-space: nowrap; /* Impede quebra de linha nas células */
+            }
+        }
+
+        /* Remove estilo fixo da imagem (h-161) que estava causando problemas */
+        .h-161 {
+            height: auto !important; /* Anula o estilo fixo */
+            max-height: 16rem;
+        }
+
+        /* CORREÇÃO DO EIXO Y: Aumenta o padding do elemento canvas para rótulos longos */
+        .chart-container-padding {
+            padding-left: 15px;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <script type="module">
+        // -----------------------------------------------------
+        // Variáveis e Constantes
+        // -----------------------------------------------------
+        
+        // CHAVE ONDE OS DADOS SERÃO SALVOS NO NAVEGADOR (LocalStorage)
+        const LOCAL_STORAGE_KEY = 'recebimentos_eulalia_v1';
+        
+        // --- Constantes de Repasse ---
+        const REPASSE_BASE_PERCENTUAL = 0.20; // 20% - Particulares
+        const REPASSE_UNIMED_PERCENTUAL = 0.25; // 25% - Unimed
+        const REPASSE_BAROPODOMETRIA = 0.50; // 50% - Baropodometria
+
+        // Variável de estado para dados
+        window.recebimentos = [];
+        window.graficoPagamento = null;
+        window.graficoOrigem = null;
+        
+        // Armazena o resumo para ser usado no Excel
+        window.resumoGeral = { totalBruto: 0, totalLiquidoEulalia: 0, totalRepasseClinica: 0 };
+
+        // -----------------------------------------------------
+        // Funções de Persistência (LocalStorage)
+        // -----------------------------------------------------
+
+        function loadData() {
+            try {
+                const data = localStorage.getItem(LOCAL_STORAGE_KEY);
+                window.recebimentos = data ? JSON.parse(data) : [];
+                console.log("Dados carregados do LocalStorage:", window.recebimentos.length);
+            } catch (e) {
+                console.error("Erro ao carregar dados do LocalStorage:", e);
+                window.recebimentos = [];
+            }
+            // Chama o renderizador para mostrar os dados carregados
+            window.renderizarTabela();
+            window.calcularResumo();
+            window.atualizarGraficos();
+        }
+
+        function saveData() {
+            try {
+                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(window.recebimentos));
+                console.log("Dados salvos no LocalStorage.");
+                window.renderizarTabela();
+                window.calcularResumo();
+                window.atualizarGraficos();
+            } catch (e) {
+                console.error("Erro ao salvar dados no LocalStorage:", e);
+                window.showStatus('Erro ao salvar os dados no navegador.', 'bg-red-500');
+            }
+        }
+        
+        // Função para mostrar mensagens de status (a animação pedida)
+        window.showStatus = function(message, bgColor) {
+            const statusDiv = document.getElementById('status-message');
+            statusDiv.textContent = message;
+            // Remove classes antigas e mostra
+            statusDiv.classList.remove('hidden', 'bg-green-500', 'bg-red-500', 'opacity-0', 'translate-y-4');
+            statusDiv.classList.add(bgColor, 'opacity-100', 'translate-y-0', 'transition', 'ease-out', 'duration-300');
+            
+            // Esconde após 3 segundos com animação
+            setTimeout(() => {
+                statusDiv.classList.remove('opacity-100', 'translate-y-0');
+                statusDiv.classList.add('opacity-0', 'translate-y-4');
+                setTimeout(() => statusDiv.classList.add('hidden'), 300); // Esconde de verdade depois da transição
+            }, 3000);
+        }
+
+        window.adicionarRecebimento = function() {
+            const valorBruto = parseFloat(document.getElementById('valor').value);
+            const tipoAtendimento = document.getElementById('tipoAtendimento').value;
+            const formaPagamentoCompleta = document.getElementById('formaPagamento').value;
+            const dataRecebimento = document.getElementById('dataRecebimento').value;
+
+            if (isNaN(valorBruto) || valorBruto <= 0 || !dataRecebimento) {
+                window.showStatus('Preencha o valor e a data corretamente!', 'bg-red-500');
+                return;
+            }
+
+            let repasseTotalClinica = 0;
+            let origemSimples = '';
+            
+            // --- Captura a hora e minuto do registro ---
+            const agora = new Date();
+            const horaRegistro = agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+            // --- Lógica de Repasse ---
+            if (tipoAtendimento === 'baropodometria') {
+                repasseTotalClinica = valorBruto * REPASSE_BAROPODOMETRIA;
+                origemSimples = 'Baropodometria (50% Repasse)';
+            } else if (tipoAtendimento === 'unimed') {
+                repasseTotalClinica = valorBruto * REPASSE_UNIMED_PERCENTUAL;
+                origemSimples = 'UNIMED (25% Repasse)';
+            } else {
+                repasseTotalClinica = valorBruto * REPASSE_BASE_PERCENTUAL;
+                origemSimples = 'Particular/Convênio (20% Repasse)';
+            }
+
+            const valorLiquidoEulalia = valorBruto - repasseTotalClinica;
+
+            // Mapeia a forma de pagamento para a categoria do gráfico
+            let formaPagamentoGrafico;
+            if (formaPagamentoCompleta.startsWith('cartao')) {
+                formaPagamentoGrafico = 'cartao';
+            } else if (formaPagamentoCompleta.startsWith('pix')) {
+                formaPagamentoGrafico = 'pix';
+            } else {
+                formaPagamentoGrafico = 'dinheiro';
+            }
+
+            const novoRecebimento = {
+                // Usamos um timestamp como ID local, simulando o firestoreId
+                firestoreId: Date.now().toString(),
+                data: dataRecebimento,
+                horaRegistro: horaRegistro, // NOVO CAMPO: Hora de registro
+                valorBruto: parseFloat(valorBruto.toFixed(2)),
+                tipoAtendimento: tipoAtendimento,
+                formaPagamento: formaPagamentoCompleta,
+                repasseTotalClinica: parseFloat(repasseTotalClinica.toFixed(2)),
+                valorLiquido: parseFloat(valorLiquidoEulalia.toFixed(2)),
+                origemSimples: origemSimples, 
+                formaPagamentoGrafico: formaPagamentoGrafico,
+                timestamp: new Date().toISOString()
+            };
+
+            window.recebimentos.push(novoRecebimento);
+            saveData();
+
+            window.showStatus('Recebimento adicionado com sucesso!', 'bg-green-500');
+            document.getElementById('valor').value = '';
+            // GARANTE QUE O CAMPO DATA VOLTA PARA A DATA ATUAL APÓS O REGISTRO
+            document.getElementById('dataRecebimento').valueAsDate = new Date();
+        }
+        
+        window.removerRecebimento = function(firestoreId) {
+            const modal = document.getElementById('confirm-modal');
+            const confirmBtn = document.getElementById('confirm-delete-btn');
+            const cancelBtn = document.getElementById('cancel-delete-btn');
+            
+            modal.classList.remove('hidden');
+
+            const handleDelete = () => {
+                const index = window.recebimentos.findIndex(rec => rec.firestoreId === firestoreId);
+                if (index !== -1) {
+                    window.recebimentos.splice(index, 1);
+                    saveData();
+                    window.showStatus('Registro removido com sucesso!', 'bg-green-500');
+                } else {
+                    window.showStatus('Erro: Registro não encontrado.', 'bg-red-500');
+                }
+                
+                // Esconde e limpa listeners
+                modal.classList.add('hidden');
+                confirmBtn.onclick = null;
+                cancelBtn.onclick = null;
+            };
+            
+            const handleCancel = () => {
+                modal.classList.add('hidden');
+                confirmBtn.onclick = null;
+                cancelBtn.onclick = null;
+            };
+            
+            confirmBtn.onclick = handleDelete;
+            cancelBtn.onclick = handleCancel;
+        }
+
+        window.limparDados = function() {
+            const modal = document.getElementById('clear-modal');
+            const confirmBtn = document.getElementById('confirm-clear-btn');
+            const cancelBtn = document.getElementById('cancel-clear-btn');
+            
+            modal.classList.remove('hidden');
+
+            const handleClear = () => {
+                if (window.recebimentos.length === 0) {
+                     window.showStatus('Não há dados para limpar.', 'bg-red-500');
+                     modal.classList.add('hidden');
+                     return;
+                }
+                
+                window.recebimentos = [];
+                saveData();
+                
+                window.showStatus('Todos os dados foram limpos com sucesso!', 'bg-green-500');
+                modal.classList.add('hidden');
+                confirmBtn.onclick = null;
+                cancelBtn.onclick = null;
+            };
+            
+            const handleCancelClear = () => {
+                modal.classList.add('hidden');
+                confirmBtn.onclick = null;
+                cancelBtn.onclick = null;
+            };
+
+            confirmBtn.onclick = handleClear;
+            cancelBtn.onclick = handleCancelClear;
+        }
+
+        // -----------------------------------------------------
+        // Função de Exportação para Excel
+        // -----------------------------------------------------
+        window.exportarParaExcel = function() {
+            const tabelaDiv = document.getElementById('tabelaRecebimentosDiv');
+            if (!tabelaDiv) {
+                window.showStatus('Erro: Tabela não encontrada para exportação.', 'bg-red-500');
+                return;
+            }
+            
+            if (window.recebimentos.length === 0) {
+                 window.showStatus('Não há dados para exportar.', 'bg-red-500');
+                 return;
+            }
+
+            // 1. Prepara a Tabela de Detalhes
+            const tabelaClonadaDiv = tabelaDiv.cloneNode(true); 
+            const tabelaClonada = tabelaClonadaDiv.querySelector('table'); 
+            const linhas = tabelaClonada.querySelectorAll('tr');
+
+            linhas.forEach(linha => {
+                // Remove a última célula (coluna Ação/Remover)
+                const celulas = linha.querySelectorAll('th, td');
+                if (celulas.length > 0) {
+                    celulas[celulas.length - 1].remove(); 
+                }
+            });
+            
+            // 2. Cria a Tabela de Resumo para o Excel
+            const formatter = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+            
+            const resumoHtml = `
+                <br><br><br>
+                <h3 style="font-size: 18px; font-weight: bold; color: #0056b3;">RESUMO GERAL DOS RECEBIMENTOS</h3>
+                <table border="1" style="border-collapse: collapse; width: 50%; min-width: 400px; font-family: Arial, sans-serif;">
+                    <thead>
+                        <tr style="background-color: #f2f2f2;">
+                            <th style="padding: 8px; text-align: left;">Descrição</th>
+                            <th style="padding: 8px; text-align: right;">Valor</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td style="padding: 8px; font-weight: bold;">Total Bruto Recebido</td>
+                            <td style="padding: 8px; text-align: right; color: #0056b3; font-weight: bold;">${formatter.format(window.resumoGeral.totalBruto)}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 8px; font-weight: bold;">Total Repasse para a Clínica</td>
+                            <td style="padding: 8px; text-align: right; color: #dc3545; font-weight: bold;">${formatter.format(window.resumoGeral.totalRepasseClinica)}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 8px; font-weight: bold;">Total Líquido (Dra. Eulália)</td>
+                            <td style="padding: 8px; text-align: right; color: #28a745; font-weight: bold;">${formatter.format(window.resumoGeral.totalLiquidoEulalia)}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            `;
+
+            // 3. Constrói o Conteúdo Final
+            const uri = 'data:application/vnd.ms-excel;base64,';
+            const base64 = (s) => window.btoa(unescape(encodeURIComponent(s)));
+
+            const template = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"></head><body>' +
+                             '<h2 style="font-size: 24px; color: #0056b3;">Relatório Financeiro Detalhado Dra. Eulália</h2>' + 
+                             tabelaClonada.outerHTML + // Usamos outerHTML da tabela clonada para incluir a tag <table>
+                             resumoHtml + // Adiciona o resumo logo após a tabela
+                             '</body></html>';
+
+            const nomeArquivo = `Relatorio_Financeiro_Eulalia_${new Date().toISOString().slice(0, 10)}.xls`;
+            
+            // Cria um link temporário para forçar o download
+            const link = document.createElement('a');
+            link.href = uri + base64(template);
+            link.download = nomeArquivo;
+            
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            window.showStatus('Dados exportados para Excel com sucesso!', 'bg-green-500');
+        }
+
+
+        // -----------------------------------------------------
+        // Funções de UI
+        // -----------------------------------------------------
+
+        window.renderizarTabela = function() {
+            const tbody = document.getElementById('tabelaRecebimentos').querySelector('tbody');
+            tbody.innerHTML = ''; 
+
+            // Ordena os dados pela data (do mais recente para o mais antigo)
+            const recebimentosOrdenados = [...window.recebimentos].sort((a, b) => new Date(b.data) - new Date(a.data));
+
+            if (recebimentosOrdenados.length === 0) {
+                 const tr = tbody.insertRow();
+                 // Colspan ajustado para 8 colunas (DATA, HORA, BRUTO, ATENDIMENTO, PAGAMENTO, REPASSE, LÍQUIDO, AÇÃO)
+                 tr.innerHTML = '<td colspan="8" class="px-6 py-4 text-center text-gray-500 italic">Nenhum registro encontrado.</td>'; 
+                 return;
+            }
+
+            recebimentosOrdenados.forEach(rec => {
+                const tr = tbody.insertRow();
+                tr.classList.add('hover:bg-gray-50');
+                
+                tr.insertCell().textContent = window.formatarData(rec.data);
+                
+                // Coluna HORA
+                tr.insertCell().textContent = rec.horaRegistro || '--:--';
+                
+                tr.insertCell().textContent = `R$ ${rec.valorBruto.toFixed(2).replace('.', ',')}`;
+                tr.insertCell().textContent = window.formatarTipoAtendimento(rec.tipoAtendimento); 
+                tr.insertCell().textContent = window.formatarFormaPagamento(rec.formaPagamento); 
+                
+                // Destaca o repasse
+                const cellRepasse = tr.insertCell();
+                cellRepasse.textContent = `R$ ${rec.repasseTotalClinica.toFixed(2).replace('.', ',')}`;
+                cellRepasse.classList.add('font-semibold', 'text-red-600'); 
+
+                // Destaca o líquido
+                const cellLiquido = tr.insertCell();
+                cellLiquido.textContent = `R$ ${rec.valorLiquido.toFixed(2).replace('.', ',')}`;
+                cellLiquido.classList.add('font-bold', 'text-secondary-green');
+
+                const cellAcao = tr.insertCell();
+                const btnRemover = document.createElement('button');
+                btnRemover.textContent = 'Remover';
+                btnRemover.classList.add('px-3', 'py-1', 'bg-red-500', 'text-white', 'rounded-md', 'hover:bg-red-600', 'text-sm');
+                // Usa o ID local para remoção
+                btnRemover.onclick = () => window.removerRecebimento(rec.firestoreId); 
+                cellAcao.appendChild(btnRemover);
+            });
+        }
+
+        window.calcularResumo = function() {
+            let totalBruto = 0;
+            let totalLiquidoEulalia = 0;
+            let totalRepasseClinica = 0;
+            
+            // Resumo Detalhado por Forma de Pagamento (Bruto)
+            const resumoPagamento = {
+                cartao_eulalia: 0,
+                cartao_dr_lucas: 0,
+                pix_eulalia: 0,
+                pix_dr_lucas: 0,
+                dinheiro: 0
+            };
+
+            window.recebimentos.forEach(rec => {
+                totalBruto += rec.valorBruto;
+                totalLiquidoEulalia += rec.valorLiquido;
+                totalRepasseClinica += rec.repasseTotalClinica;
+                
+                // Acumula por forma de pagamento específica
+                if (resumoPagamento.hasOwnProperty(rec.formaPagamento)) {
+                    resumoPagamento[rec.formaPagamento] += rec.valorBruto;
+                }
+            });
+            
+            // SALVA OS TOTAIS GERAIS NA VARIÁVEL GLOBAL
+            window.resumoGeral.totalBruto = totalBruto;
+            window.resumoGeral.totalLiquidoEulalia = totalLiquidoEulalia;
+            window.resumoGeral.totalRepasseClinica = totalRepasseClinica;
+
+            // Formatador para Real Brasileiro
+            const formatter = new Intl.NumberFormat('pt-BR', {
+                style: 'currency',
+                currency: 'BRL',
+            });
+
+            // Atualiza Resumo Geral no HTML
+            document.getElementById('total-bruto').textContent = formatter.format(totalBruto);
+            document.getElementById('total-liquido').textContent = formatter.format(totalLiquidoEulalia);
+            document.getElementById('total-clinica').textContent = formatter.format(totalRepasseClinica);
+            
+            // Atualiza Resumo Detalhado
+            document.getElementById('resumo-cartao-eulalia').textContent = formatter.format(resumoPagamento.cartao_eulalia);
+            document.getElementById('resumo-cartao-dr-lucas').textContent = formatter.format(resumoPagamento.cartao_dr_lucas);
+            document.getElementById('resumo-pix-eulalia').textContent = formatter.format(resumoPagamento.pix_eulalia);
+            document.getElementById('resumo-pix-dr-lucas').textContent = formatter.format(resumoPagamento.pix_dr_lucas);
+            document.getElementById('resumo-dinheiro').textContent = formatter.format(resumoPagamento.dinheiro);
+        }
+
+        window.atualizarGraficos = function() {
+            const dadosGraficoPagamento = {
+                dinheiro: 0, cartao: 0, pix: 0
+            };
+            const dadosGraficoOrigem = {}; 
+
+            window.recebimentos.forEach(rec => {
+                // Gráfico 1: Distribuição Bruta por Categoria de Pagamento
+                dadosGraficoPagamento[rec.formaPagamentoGrafico] += rec.valorBruto;
+                
+                // Gráfico 2: Distribuição Líquida por Tipo de Atendimento
+                const nomeAtendimento = window.formatarTipoAtendimento(rec.tipoAtendimento);
+                dadosGraficoOrigem[nomeAtendimento] = (dadosGraficoOrigem[nomeAtendimento] || 0) + rec.valorLiquido;
+            });
+
+            // --- GRÁFICO 1: PAGAMENTO ---
+            if (window.graficoPagamento) { window.graficoPagamento.destroy(); }
+            const ctxPagamento = document.getElementById('graficoPagamento').getContext('2d');
+            window.graficoPagamento = new Chart(ctxPagamento, {
+                type: 'pie',
+                data: {
+                    labels: ['Dinheiro', 'Cartão', 'PIX'],
+                    datasets: [{
+                        label: 'Valor Bruto (R$)',
+                        data: [
+                            dadosGraficoPagamento.dinheiro.toFixed(2),
+                            dadosGraficoPagamento.cartao.toFixed(2),
+                            dadosGraficoPagamento.pix.toFixed(2)
+                        ],
+                        backgroundColor: ['#4bc0c0', '#ff6384', '#ffcd56']
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false } 
+            });
+            
+            // --- GRÁFICO 2: TIPO DE ATENDIMENTO (LÍQUIDO) ---
+            if (window.graficoOrigem) { window.graficoOrigem.destroy(); }
+            const labelsOrigem = Object.keys(dadosGraficoOrigem);
+            const dadosOrigem = Object.values(dadosGraficoOrigem).map(v => v.toFixed(2));
+            const ctxOrigem = document.getElementById('graficoOrigem').getContext('2d');
+            window.graficoOrigem = new Chart(ctxOrigem, {
+                type: 'bar',
+                data: {
+                    labels: labelsOrigem,
+                    datasets: [{
+                        label: 'Valor Líquido Dra. (R$)',
+                        data: dadosOrigem,
+                        backgroundColor: '#36a2eb'
+                    }]
+                },
+                // CORREÇÃO do EIXO Y do gráfico de Barras:
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false, 
+                    indexAxis: 'y', // Define o eixo X (horizontal) como o eixo das categorias
+                    scales: { 
+                        x: { beginAtZero: true }, 
+                        y: { ticks: { autoSkip: false } } 
+                    },
+                    layout: {
+                        padding: {
+                            left: 20 
+                        }
+                    }
+                } 
+            });
+        }
+
+        // Funções auxiliares de formatação (Inalteradas)
+        window.formatarData = function(dataISO) {
+            if (!dataISO) return '';
+            return dataISO.split('-').reverse().join('/'); // 'YYYY-MM-DD' para 'DD/MM/YYYY'
+        }
+
+        window.formatarTipoAtendimento = function(key) {
+            const map = {
+                'fisioterapia_individual': 'Fisio Respiratória Individual',
+                'pacote_fisioterapia': 'Pacote Fisio Respiratória',
+                'consulta_assimetria': 'Consulta (Assimetria/Torcicolo)',
+                'pacote_assimetria': 'Consulta + Pacote (Assimetria/Torcicolo)',
+                'unimed': 'Unimed',
+                'massagem': 'Massagem',
+                'baropodometria': 'Baropodometria',
+                'outros_atendimentos': 'Outros Atendimentos',
+                'outros_planos': 'Outros Planos'
+            };
+            return map[key] || key;
+        }
+
+        window.formatarFormaPagamento = function(key) {
+            const map = {
+                'cartao_eulalia': 'Cartão Eulália',
+                'cartao_dr_lucas': 'Cartão Dr. Lucas',
+                'pix_eulalia': 'PIX Eulália',
+                'pix_dr_lucas': 'PIX Dr. Lucas',
+                'dinheiro': 'Dinheiro'
+            };
+            return map[key] || key;
+        }
+
+        // -----------------------------------------------------
+        // Inicialização
+        // -----------------------------------------------------
+
+        document.addEventListener('DOMContentLoaded', () => {
+            // Simula a inicialização, carregando dados locais
+            loadData();
+            
+            // GARANTIDO: Define a data atual como padrão no campo de data ao carregar a página
+            document.getElementById('dataRecebimento').valueAsDate = new Date();
+            
+            // Anexa o event listener ao botão
+            const btn = document.getElementById('btnAdicionarRecebimento');
+            if (btn) {
+                btn.addEventListener('click', window.adicionarRecebimento);
+            } else {
+                console.error("Botão de adicionar recebimento não encontrado.");
+            }
+            
+            // Remove a exibição de ID de usuário, pois não há Firebase Auth
+            document.getElementById('user-id-display').textContent = 'Salvo no seu navegador (Uso Local)';
+        });
+
+    </script>
+</head>
+<body class="bg-bg-light p-4 md:p-8">
+
+    <div id="confirm-modal" class="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50 hidden">
+        <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
+            <h3 class="text-lg font-bold text-red-600 mb-4">Confirmação Necessária</h3>
+            <p class="mb-6">Tem certeza que deseja remover este registro? Esta ação não pode ser desfeita.</p>
+            <div class="flex justify-end space-x-4">
+                <button id="cancel-delete-btn" class="px-4 py-2 bg-gray-300 text-gray-800 rounded-md hover:bg-gray-400">Cancelar</button>
+                <button id="confirm-delete-btn" class="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600">Sim, Remover</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="clear-modal" class="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50 hidden">
+        <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
+            <h3 class="text-lg font-bold text-red-600 mb-4">ATENÇÃO: Limpar Todos os Dados</h3>
+            <p class="mb-6">Você está prestes a apagar **TODOS** os registros salvos no seu navegador (LocalStorage). Deseja realmente continuar?</p>
+            <div class="flex justify-end space-x-4">
+                <button id="cancel-clear-btn" class="px-4 py-2 bg-gray-300 text-gray-800 rounded-md hover:bg-gray-400">Cancelar</button>
+                <button id="confirm-clear-btn" class="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600">Sim, APAGAR TUDO</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="status-message" class="fixed top-4 right-4 bg-green-500 text-white p-3 rounded-md shadow-lg hidden z-40 transition ease-out duration-300 transform translate-y-4 opacity-0">
+        Status...
+    </div>
+
+    <div class="max-w-7xl mx-auto bg-white p-6 md:p-10 rounded-xl shadow-2xl">
+        <div class="flex-shrink-0 mb-4 md:mb-0">
+            <img src="IMG_4146.PNG" alt="Logo da Clínica" class="h-161 w-auto object-contain mx-auto md:mx-0">
+        </div>
+
+        <header class="border-b pb-4 mb-6 flex flex-col md:flex-row items-start md:items-center justify-between"> 
+            <div>
+                <h1 class="text-2xl md:text-3xl font-extrabold text-primary-blue">
+                    💰 Controle Financeiro <span class="text-gray-700">Dra. Eulália</span>
+                </h1>
+                <p id="user-id-display" class="text-xs text-gray-500 mt-1">
+                    Salvo no seu navegador (Uso Local)
+                </p>
+            </div>
+            
+            <div class="mt-4 md:mt-0 flex space-x-2">
+                <button onclick="window.exportarParaExcel()" class="px-4 py-2 bg-blue-500 text-white font-semibold text-sm rounded-lg shadow-md hover:bg-blue-700 whitespace-nowrap">
+                    <span class="hidden md:inline">Exportar para </span>Excel 📊
+                </button>
+                <button onclick="window.limparDados()" class="px-4 py-2 bg-red-500 text-white font-semibold text-sm rounded-lg shadow-md hover:bg-red-700 whitespace-nowrap">
+                    Limpar Tudo
+                </button>
+            </div>
+        </header>
+
+        <section class="mb-8 p-5 border border-gray-200 rounded-lg bg-indigo-50/50">
+            <h2 class="text-xl md:text-2xl font-semibold text-primary-blue mb-4">Registrar Novo Recebimento</h2>
+            <form id="formAdicionar" onsubmit="event.preventDefault(); window.adicionarRecebimento();">
+                <div class="flex flex-col md:flex-row md:flex-wrap gap-4 items-end">
+                    
+                    <div class="flex flex-col w-full md:flex-1 md:min-w-[150px]">
+                        <label for="valor" class="text-sm font-medium mb-1">Valor Bruto (R$)</label>
+                        <input type="number" id="valor" step="0.01" min="0" required class="p-2 border border-gray-300 rounded-lg focus:ring-primary-blue focus:border-primary-blue">
+                    </div>
+                    
+                    <div class="flex flex-col w-full md:flex-1 md:min-w-[200px]">
+                        <label for="tipoAtendimento" class="text-sm font-medium mb-1">Tipo de Atendimento</label>
+                        <select id="tipoAtendimento" required class="p-2 border border-gray-300 rounded-lg focus:ring-primary-blue focus:border-primary-blue">
+                            <option value="fisioterapia_individual">Fisioterapia Respiratória Individual</option>
+                            <option value="pacote_fisioterapia">Pacote de Fisioterapia Respiratória</option>
+                            <option value="consulta_assimetria">Consulta – Assimetria/Torcicolo/Estimulação</option>
+                            <option value="pacote_assimetria">Consulta + Pacote (Assimetria/Torcicolo)</option>
+                            <option value="unimed">Unimed</option>
+                            <option value="massagem">Massagem</option>
+                            <option value="baropodometria">Baropodometria</option>
+                            <option value="outros_atendimentos">Outros Atendimentos</option>
+                            <option value="outros_planos">Outros Planos</option>
+                        </select>
+                    </div>
+                    
+                    <div class="flex flex-col w-full md:flex-1 md:min-w-[150px]">
+                        <label for="formaPagamento" class="text-sm font-medium mb-1">Forma de Pagamento</label>
+                        <select id="formaPagamento" required class="p-2 border border-gray-300 rounded-lg focus:ring-primary-blue focus:border-primary-blue">
+                            <option value="cartao_eulalia">Cartão Eulália</option>
+                            <option value="cartao_dr_lucas">Cartão Dr. Lucas</option>
+                            <option value="pix_eulalia">Pix Eulália</option>
+                            <option value="pix_dr_lucas">Pix Dr. Lucas</option>
+                            <option value="dinheiro">Dinheiro</option>
+                        </select>
+                    </div>
+                    
+                    <div class="flex flex-col w-full md:flex-1 md:min-w-[120px]">
+                        <label for="dataRecebimento" class="text-sm font-medium mb-1">Data</label>
+                        <input type="date" id="dataRecebimento" required class="p-2 border border-gray-300 rounded-lg focus:ring-primary-blue focus:border-primary-blue">
+                    </div>
+
+                    <button type="submit" id="btnAdicionarRecebimento" class="w-full md:w-auto px-6 py-2 bg-secondary-green text-white font-bold rounded-lg shadow-md hover:bg-green-700 self-center mt-2 md:mt-0">
+                        ➕ Adicionar Recebimento
+                    </button>
+                </div>
+            </form>
+        </section>
+
+        <section class="mb-8">
+            <h2 class="text-xl md:text-2xl font-semibold text-primary-blue mb-4">📊 Resumo Geral e Repasse</h2>
+            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                
+                <div class="bg-blue-100 p-5 rounded-xl shadow-lg border-l-4 border-primary-blue">
+                    <p class="text-sm text-gray-600">Total Bruto Recebido</p>
+                    <strong id="total-bruto" class="text-2xl font-extrabold text-primary-blue mt-1 block">R$ 0,00</strong>
+                </div>
+
+                <div class="bg-red-100 p-5 rounded-xl shadow-lg border-l-4 border-red-500">
+                    <p class="text-sm text-gray-600">Total Repasse para a Clínica</p>
+                    <strong id="total-clinica" class="text-2xl font-extrabold text-red-700 mt-1 block">R$ 0,00</strong>
+                    <p class="text-xs text-red-500 mt-1">*(20% Part. | 25% Unimed | 50% Baro)*</p>
+                </div>
+                
+                <div class="bg-green-100 p-5 rounded-xl shadow-lg border-l-4 border-secondary-green">
+                    <p class="text-sm text-gray-600">Total Líquido (Dra. Eulália)</p>
+                    <strong id="total-liquido" class="text-2xl font-extrabold text-secondary-green mt-1 block">R$ 0,00</strong>
+                </div>
+            </div>
+            
+            <h3 class="text-lg font-semibold text-gray-700 mt-6 mb-3">Detalhe Bruto por Conta de Recebimento</h3>
+            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 text-center text-sm font-medium">
+                <div class="bg-gray-100 p-3 rounded-lg border border-gray-200">
+                    <p class="text-gray-500">Cartão Eulália</p>
+                    <strong id="resumo-cartao-eulalia" class="text-blue-600">R$ 0,00</strong>
+                </div>
+                <div class="bg-gray-100 p-3 rounded-lg border border-gray-200">
+                    <p class="text-gray-500">Cartão Dr. Lucas</p>
+                    <strong id="resumo-cartao-dr-lucas" class="text-blue-600">R$ 0,00</strong>
+                </div>
+                <div class="bg-gray-100 p-3 rounded-lg border border-gray-200">
+                    <p class="text-gray-500">PIX Eulália</p>
+                    <strong id="resumo-pix-eulalia" class="text-blue-600">R$ 0,00</strong>
+                </div>
+                <div class="bg-gray-100 p-3 rounded-lg border border-gray-200">
+                    <p class="text-gray-500">PIX Dr. Lucas</p>
+                    <strong id="resumo-pix-dr-lucas" class="text-blue-600">R$ 0,00</strong>
+                </div>
+                <div class="bg-gray-100 p-3 rounded-lg border border-gray-200">
+                    <p class="text-gray-500">Dinheiro</p>
+                    <strong id="resumo-dinheiro" class="text-blue-600">R$ 0,00</strong>
+                </div>
+            </div>
+        </section>
+
+        <section class="mb-8">
+            <h2 class="text-xl md:text-2xl font-semibold text-primary-blue mb-4">Gráficos de Distribuição</h2>
+            
+            <div class="flex flex-col md:flex-row gap-6">
+                
+                <div class="w-full md:w-1/2 p-4 bg-gray-50 rounded-lg shadow-md h-64">
+                    <h3 class="text-lg font-semibold text-gray-700 mb-2">Bruto por Forma de Pagamento</h3>
+                    <div class="h-48"> 
+                        <canvas id="graficoPagamento"></canvas>
+                    </div>
+                </div>
+                
+                <div class="w-full md:w-1/2 p-4 bg-gray-50 rounded-lg shadow-md h-64 pl-6 chart-container-padding"> 
+                    <h3 class="text-lg font-semibold text-gray-700 mb-2">Líquido por Tipo de Atendimento</h3>
+                    <div class="h-48">
+                        <canvas id="graficoOrigem"></canvas>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+        <section>
+            <h2 class="text-xl md:text-2xl font-semibold text-primary-blue mb-4">Histórico de Recebimentos</h2>
+            
+            <div id="tabelaRecebimentosDiv" class="overflow-x-auto w-full border border-gray-200 rounded-lg shadow-lg">
+                <table id="tabelaRecebimentos" class="min-w-full divide-y divide-gray-200 data-table">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">DATA</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">HORA</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">VALOR BRUTO</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ATENDIMENTO</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">PAGAMENTO</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-red-600 uppercase tracking-wider">REPASSE CLÍNICA</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-secondary-green uppercase tracking-wider">LÍQUIDO DRA.</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">AÇÃO</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                        </tbody>
+                </table>
+            </div>
+        </section>
+
+    </div>
+</body>
+</html>
