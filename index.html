@@ -126,7 +126,8 @@
         window.adicionarRecebimento = function() {
             const valorBruto = parseFloat(document.getElementById('valor').value);
             const tipoAtendimento = document.getElementById('tipoAtendimento').value;
-            const formaPagamentoCompleta = document.getElementById('formaPagamento').value;
+            // CORRIGIDO: Pega a forma de pagamento, que agora inclui 'unimed'
+            const formaPagamentoCompleta = document.getElementById('formaPagamento').value; 
             const dataRecebimento = document.getElementById('dataRecebimento').value;
 
             if (isNaN(valorBruto) || valorBruto <= 0 || !dataRecebimento) {
@@ -145,7 +146,8 @@
             if (tipoAtendimento === 'baropodometria') {
                 repasseTotalClinica = valorBruto * REPASSE_BAROPODOMETRIA;
                 origemSimples = 'Baropodometria (50% Repasse)';
-            } else if (tipoAtendimento === 'unimed') {
+            } else if (tipoAtendimento === 'unimed' || formaPagamentoCompleta === 'unimed') { 
+                // A Unimed pode vir tanto do tipo de atendimento quanto da forma de pagamento
                 repasseTotalClinica = valorBruto * REPASSE_UNIMED_PERCENTUAL;
                 origemSimples = 'UNIMED (25% Repasse)';
             } else {
@@ -161,18 +163,21 @@
                 formaPagamentoGrafico = 'cartao';
             } else if (formaPagamentoCompleta.startsWith('pix')) {
                 formaPagamentoGrafico = 'pix';
-            } else {
+            } else if (formaPagamentoCompleta === 'dinheiro') {
                 formaPagamentoGrafico = 'dinheiro';
+            } else {
+                // Unimed e qualquer outra forma não mapeada vai para 'outros' no gráfico de pizza
+                formaPagamentoGrafico = 'outros'; 
             }
 
             const novoRecebimento = {
                 // Usamos um timestamp como ID local, simulando o firestoreId
                 firestoreId: Date.now().toString(),
                 data: dataRecebimento,
-                horaRegistro: horaRegistro, // NOVO CAMPO: Hora de registro
+                horaRegistro: horaRegistro, 
                 valorBruto: parseFloat(valorBruto.toFixed(2)),
                 tipoAtendimento: tipoAtendimento,
-                formaPagamento: formaPagamentoCompleta,
+                formaPagamento: formaPagamentoCompleta, 
                 repasseTotalClinica: parseFloat(repasseTotalClinica.toFixed(2)),
                 valorLiquido: parseFloat(valorLiquidoEulalia.toFixed(2)),
                 origemSimples: origemSimples, 
@@ -319,8 +324,8 @@
 
             const template = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"></head><body>' +
                              '<h2 style="font-size: 24px; color: #0056b3;">Relatório Financeiro Detalhado Dra. Eulália</h2>' + 
-                             tabelaClonada.outerHTML + // Usamos outerHTML da tabela clonada para incluir a tag <table>
-                             resumoHtml + // Adiciona o resumo logo após a tabela
+                             tabelaClonada.outerHTML + 
+                             resumoHtml + 
                              '</body></html>';
 
             const nomeArquivo = `Relatorio_Financeiro_Eulalia_${new Date().toISOString().slice(0, 10)}.xls`;
@@ -336,7 +341,6 @@
             
             window.showStatus('Dados exportados para Excel com sucesso!', 'bg-green-500');
         }
-
 
         // -----------------------------------------------------
         // Funções de UI
@@ -367,6 +371,7 @@
                 
                 tr.insertCell().textContent = `R$ ${rec.valorBruto.toFixed(2).replace('.', ',')}`;
                 tr.insertCell().textContent = window.formatarTipoAtendimento(rec.tipoAtendimento); 
+                // Chamada ajustada para o novo formato de pagamento
                 tr.insertCell().textContent = window.formatarFormaPagamento(rec.formaPagamento); 
                 
                 // Destaca o repasse
@@ -400,7 +405,8 @@
                 cartao_dr_lucas: 0,
                 pix_eulalia: 0,
                 pix_dr_lucas: 0,
-                dinheiro: 0
+                dinheiro: 0,
+                unimed: 0 // CORRIGIDO: Adicionado campo Unimed
             };
 
             window.recebimentos.forEach(rec => {
@@ -436,22 +442,45 @@
             document.getElementById('resumo-pix-eulalia').textContent = formatter.format(resumoPagamento.pix_eulalia);
             document.getElementById('resumo-pix-dr-lucas').textContent = formatter.format(resumoPagamento.pix_dr_lucas);
             document.getElementById('resumo-dinheiro').textContent = formatter.format(resumoPagamento.dinheiro);
+            // CORRIGIDO: Atualiza o novo bloco da Unimed
+            document.getElementById('resumo-unimed').textContent = formatter.format(resumoPagamento.unimed); 
         }
 
         window.atualizarGraficos = function() {
+            // Adicionado 'outros' para contabilizar Unimed e qualquer outra forma não categorizada
             const dadosGraficoPagamento = {
-                dinheiro: 0, cartao: 0, pix: 0
+                dinheiro: 0, cartao: 0, pix: 0, outros: 0
             };
             const dadosGraficoOrigem = {}; 
 
             window.recebimentos.forEach(rec => {
                 // Gráfico 1: Distribuição Bruta por Categoria de Pagamento
-                dadosGraficoPagamento[rec.formaPagamentoGrafico] += rec.valorBruto;
+                if (rec.formaPagamentoGrafico && dadosGraficoPagamento.hasOwnProperty(rec.formaPagamentoGrafico)) {
+                    dadosGraficoPagamento[rec.formaPagamentoGrafico] += rec.valorBruto;
+                } else {
+                    // Contabiliza Unimed e outras formas no 'outros'
+                    dadosGraficoPagamento['outros'] += rec.valorBruto;
+                }
                 
                 // Gráfico 2: Distribuição Líquida por Tipo de Atendimento
                 const nomeAtendimento = window.formatarTipoAtendimento(rec.tipoAtendimento);
                 dadosGraficoOrigem[nomeAtendimento] = (dadosGraficoOrigem[nomeAtendimento] || 0) + rec.valorLiquido;
             });
+
+            // Remove categorias com valor zero para o gráfico de pizza
+            const labelsPagamento = ['Dinheiro', 'Cartão', 'PIX', 'Outros/Unimed'];
+            const dataPagamento = [
+                dadosGraficoPagamento.dinheiro.toFixed(2),
+                dadosGraficoPagamento.cartao.toFixed(2),
+                dadosGraficoPagamento.pix.toFixed(2),
+                dadosGraficoPagamento.outros.toFixed(2)
+            ];
+            const colorsPagamento = ['#4bc0c0', '#ff6384', '#ffcd56', '#9966ff'];
+
+            // Filtra zero values
+            const filteredLabels = labelsPagamento.filter((_, index) => parseFloat(dataPagamento[index]) > 0);
+            const filteredData = dataPagamento.filter(v => parseFloat(v) > 0);
+            const filteredColors = colorsPagamento.filter((_, index) => parseFloat(dataPagamento[index]) > 0);
 
             // --- GRÁFICO 1: PAGAMENTO ---
             if (window.graficoPagamento) { window.graficoPagamento.destroy(); }
@@ -459,15 +488,11 @@
             window.graficoPagamento = new Chart(ctxPagamento, {
                 type: 'pie',
                 data: {
-                    labels: ['Dinheiro', 'Cartão', 'PIX'],
+                    labels: filteredLabels,
                     datasets: [{
                         label: 'Valor Bruto (R$)',
-                        data: [
-                            dadosGraficoPagamento.dinheiro.toFixed(2),
-                            dadosGraficoPagamento.cartao.toFixed(2),
-                            dadosGraficoPagamento.pix.toFixed(2)
-                        ],
-                        backgroundColor: ['#4bc0c0', '#ff6384', '#ffcd56']
+                        data: filteredData,
+                        backgroundColor: filteredColors
                     }]
                 },
                 options: { responsive: true, maintainAspectRatio: false } 
@@ -506,7 +531,7 @@
             });
         }
 
-        // Funções auxiliares de formatação (Inalteradas)
+        // Funções auxiliares de formatação
         window.formatarData = function(dataISO) {
             if (!dataISO) return '';
             return dataISO.split('-').reverse().join('/'); // 'YYYY-MM-DD' para 'DD/MM/YYYY'
@@ -518,7 +543,7 @@
                 'pacote_fisioterapia': 'Pacote Fisio Respiratória',
                 'consulta_assimetria': 'Consulta (Assimetria/Torcicolo)',
                 'pacote_assimetria': 'Consulta + Pacote (Assimetria/Torcicolo)',
-                'unimed': 'Unimed',
+                'unimed': 'Unimed', 
                 'massagem': 'Massagem',
                 'baropodometria': 'Baropodometria',
                 'outros_atendimentos': 'Outros Atendimentos',
@@ -533,7 +558,8 @@
                 'cartao_dr_lucas': 'Cartão Dr. Lucas',
                 'pix_eulalia': 'PIX Eulália',
                 'pix_dr_lucas': 'PIX Dr. Lucas',
-                'dinheiro': 'Dinheiro'
+                'dinheiro': 'Dinheiro',
+                'unimed': 'Unimed' 
             };
             return map[key] || key;
         }
@@ -582,7 +608,7 @@
             <p class="mb-6">Você está prestes a apagar **TODOS** os registros salvos no seu navegador (LocalStorage). Deseja realmente continuar?</p>
             <div class="flex justify-end space-x-4">
                 <button id="cancel-clear-btn" class="px-4 py-2 bg-gray-300 text-gray-800 rounded-md hover:bg-gray-400">Cancelar</button>
-                <button id="confirm-clear-btn" class="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600">Sim, APAGAR TUDO</button>
+                <button id="confirm-clear-btn" class="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-700">Sim, APAGAR TUDO</button>
             </div>
         </div>
     </div>
@@ -633,7 +659,7 @@
                             <option value="pacote_fisioterapia">Pacote de Fisioterapia Respiratória</option>
                             <option value="consulta_assimetria">Consulta – Assimetria/Torcicolo/Estimulação</option>
                             <option value="pacote_assimetria">Consulta + Pacote (Assimetria/Torcicolo)</option>
-                            <option value="unimed">Unimed</option>
+                            <option value="unimed">Unimed</option> 
                             <option value="massagem">Massagem</option>
                             <option value="baropodometria">Baropodometria</option>
                             <option value="outros_atendimentos">Outros Atendimentos</option>
@@ -649,7 +675,7 @@
                             <option value="pix_eulalia">Pix Eulália</option>
                             <option value="pix_dr_lucas">Pix Dr. Lucas</option>
                             <option value="dinheiro">Dinheiro</option>
-                        </select>
+                            <option value="unimed">Unimed</option> </select>
                     </div>
                     
                     <div class="flex flex-col w-full md:flex-1 md:min-w-[120px]">
@@ -686,7 +712,7 @@
             </div>
             
             <h3 class="text-lg font-semibold text-gray-700 mt-6 mb-3">Detalhe Bruto por Conta de Recebimento</h3>
-            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 text-center text-sm font-medium">
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-center text-sm font-medium">
                 <div class="bg-gray-100 p-3 rounded-lg border border-gray-200">
                     <p class="text-gray-500">Cartão Eulália</p>
                     <strong id="resumo-cartao-eulalia" class="text-blue-600">R$ 0,00</strong>
@@ -706,6 +732,9 @@
                 <div class="bg-gray-100 p-3 rounded-lg border border-gray-200">
                     <p class="text-gray-500">Dinheiro</p>
                     <strong id="resumo-dinheiro" class="text-blue-600">R$ 0,00</strong>
+                </div>
+                <div class="bg-purple-100 p-3 rounded-lg border border-purple-300"> <p class="text-gray-500">Unimed</p>
+                    <strong id="resumo-unimed" class="text-purple-600">R$ 0,00</strong>
                 </div>
             </div>
         </section>
