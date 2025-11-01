@@ -591,6 +591,59 @@
 </head>
 <body class="bg-bg-light p-4 md:p-8">
 
+
+    
+ <!----------------------------------------------------------->
+    <style>
+        .container-central {
+    /* Garante que o container ocupe o espaço necessário para centralizar o botão */
+    text-align: center;
+    /* Adiciona um pouco de padding caso o botão seja muito grande */
+    padding: 20px;
+    }
+
+    /* --- Estilo do Botão (Tag 'a') --- */
+
+    .botao-voltar {
+        /* Transforma o link em um bloco para poder definir padding e largura */
+        display: inline-block;
+        /* Estilo e cores que remetem à arte e profissionalismo */
+        background-color: #007bff; /* Azul vibrante */
+        color: white; /* Texto branco */
+        padding: 12px 24px;
+        border-radius: 8px; /* Cantos levemente arredondados */
+        text-decoration: none; /* Remove o sublinhado padrão dos links */
+        font-size: 16px;
+        font-weight: bold;
+        /* Sombra sutil para dar profundidade, um toque artístico */
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        transition: background-color 0.3s, transform 0.2s; /* Transição suave para o hover */
+    }
+
+    /* Efeito ao passar o mouse (Hover) */
+    .botao-voltar:hover {
+        background-color: #0056b3; /* Um azul um pouco mais escuro */
+        transform: translateY(-2px); /* Eleva o botão sutilmente (Efeito 3D) */
+    }
+
+    /* Efeito ao clicar (Active) */
+    .botao-voltar:active {
+        background-color: #004085;
+        transform: translateY(0); /* Volta o botão para o lugar */
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+    </style>
+
+    <div class="container-central">
+        <a href="controle.html" class="botao-voltar">
+            TO TESTANDO KK MAIS JATA FUNCIONADO
+        </a>
+    </div>
+
+    <!----------------------------------------------------------->
+
+
+
     <div id="confirm-modal" class="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50 hidden">
         <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
             <h3 class="text-lg font-bold text-red-600 mb-4">Confirmação Necessária</h3>

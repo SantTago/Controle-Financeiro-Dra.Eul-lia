@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Controle de Despesas (Saídas) Dra. Eulália - Mensal</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary-blue': '#0056b3',
+                        'expense-red': '#dc3545', // Vermelho para Despesas
+                        'expense-light': '#f8d7da',
+                        'bg-light': '#f4f4f9',
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'Arial', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            min-height: 100vh;
+            position: relative; 
+        }
+        button {
+            transition: all 0.2s ease-in-out;
+        }
+        /* Otimização da tabela para mobile */
+        @media (max-width: 768px) {
+            .data-table th, .data-table td {
+                font-size: 11px;
+                padding: 6px 4px;
+                white-space: nowrap;
+            }
+            /* Garante que o input de data no mobile seja legível */
+            #despesaData {
+                min-width: 100px; 
+            }
+        }
+        .h-161 {
+            height: auto !important;
+            max-height: 16rem;
+        }
+        /* Estilo do Botão Voltar ao Topo */
+        #back-to-top {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+            display: none; 
+            transition: opacity 0.3s;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <script type="module">
+        // -----------------------------------------------------
+        // Variáveis e Constantes
+        // -----------------------------------------------------
+        
+        const DESPESAS_KEY = 'despesas_eulalia_saidas_v1'; 
+        
+        window.despesas = [];
+        window.despesasFiltradas = []; 
+        window.graficoDespesas = null;
+        
+        // Variáveis de controle do filtro (retornando ao Mês/Ano/Dia)
+        window.filtroMes = null;
+        window.filtroAno = null;
+        window.filtroDia = null; // 'all' para o mês inteiro, ou número do dia
+        
+        window.resumoDespesas = { totalDespesas: 0 };
+        
+        const nomesMeses = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+
+        // -----------------------------------------------------
+        // Funções de Data (Ajustada para Fuso Horário Local)
+        // -----------------------------------------------------
+        
+        // Função para obter a data local de hoje no formato YYYY-MM-DD, corrigindo o problema de fuso
+        function getTodayLocalISO() {
+            const now = new Date();
+            // Adiciona a diferença de fuso horário para garantir que a data seja a correta do dia
+            const offset = now.getTimezoneOffset() * 60000;
+            const localTime = new Date(now.getTime() - offset);
+            return localTime.toISOString().split('T')[0];
+        }
+
+        // -----------------------------------------------------
+        // Funções de Persistência e Filtro
+        // -----------------------------------------------------
+
+        function loadData() {
+            try {
+                const dataDespesas = localStorage.getItem(DESPESAS_KEY);
+                window.despesas = dataDespesas ? JSON.parse(dataDespesas) : [];
+            } catch (e) {
+                console.error("Erro ao carregar dados do LocalStorage:", e);
+                window.despesas = [];
+            }
+            
+            const hoje = new Date();
+            const dataHojeISO = getTodayLocalISO(); // Data de hoje no fuso local
+            
+            // 1. Inicializa o filtro e o registro para o DIA ATUAL
+            window.filtroMes = hoje.getMonth();
+            window.filtroAno = hoje.getFullYear();
+            window.filtroDia = hoje.getDate().toString(); 
+            
+            // Define o input de registro de despesa para o dia atual (SEMPRE abre no dia de hoje)
+            const inputRegistro = document.getElementById('despesaData');
+            if (inputRegistro) {
+                inputRegistro.value = dataHojeISO;
+            }
+
+            // 2. Popula as opções e aplica o filtro inicial
+            populateFilterOptions();
+            populateDayFilter();
+            applyFilter();
+        }
+        
+        function populateFilterOptions() {
+            const selectMes = document.getElementById('selectFiltroMes');
+            const selectAno = document.getElementById('selectFiltroAno');
+            
+            selectMes.innerHTML = '';
+            selectAno.innerHTML = '';
+
+            // Popula Meses
+            nomesMeses.forEach((nome, index) => {
+                const option = document.createElement('option');
+                option.value = index;
+                option.textContent = nome;
+                if (index === window.filtroMes) {
+                    option.selected = true;
+                }
+                selectMes.appendChild(option);
+            });
+
+            // Popula Anos
+            const anosPresentes = new Set(window.despesas.map(d => new Date(d.data).getFullYear()));
+            const anoAtual = new Date().getFullYear();
+            
+            anosPresentes.add(anoAtual); 
+            for (let i = 1; i <= 3; i++) {
+                anosPresentes.add(anoAtual - i);
+            }
+
+            const anosOrdenados = Array.from(anosPresentes).sort((a, b) => b - a);
+
+            anosOrdenados.forEach(ano => {
+                const option = document.createElement('option');
+                option.value = ano;
+                option.textContent = ano;
+                if (parseInt(ano) === window.filtroAno) {
+                    option.selected = true;
+                }
+                selectAno.appendChild(option);
+            });
+            
+            // Adiciona listener para aplicar o filtro ao mudar
+            selectMes.onchange = applyFilter;
+            selectAno.onchange = applyFilter;
+        }
+
+        // Popula o seletor de dias dinamicamente
+        function populateDayFilter() {
+            const selectDia = document.getElementById('selectFiltroDia');
+            selectDia.innerHTML = ''; 
+
+            const mes = window.filtroMes;
+            const ano = window.filtroAno;
+
+            const ultimoDia = new Date(ano, mes + 1, 0).getDate();
+            
+            // Opção para "Todos os Dias" (visão mensal)
+            const optionAll = document.createElement('option');
+            optionAll.value = 'all';
+            optionAll.textContent = 'Todos os Dias (Mês)';
+            selectDia.appendChild(optionAll);
+
+            // Popula dias de 1 até o último dia do mês
+            for (let dia = 1; dia <= ultimoDia; dia++) {
+                const option = document.createElement('option');
+                option.value = dia.toString();
+                option.textContent = dia < 10 ? `0${dia}` : dia;
+
+                // Mantém o dia selecionado (se for um dia válido)
+                if (window.filtroDia !== 'all' && parseInt(window.filtroDia) === dia) {
+                    option.selected = true;
+                }
+                selectDia.appendChild(option);
+            }
+            
+            // Corrige o valor selecionado se o dia atual for inválido para o novo mês/ano
+            if (window.filtroDia !== 'all' && parseInt(window.filtroDia) > ultimoDia) {
+                 window.filtroDia = 'all';
+                 selectDia.value = 'all';
+            } else if (window.filtroDia !== 'all') {
+                 selectDia.value = window.filtroDia;
+            } else {
+                selectDia.value = 'all';
+            }
+            
+            // Adiciona listener para aplicar o filtro ao mudar
+            selectDia.onchange = applyFilter;
+        }
+
+        window.applyFilter = function() {
+            const mes = parseInt(document.getElementById('selectFiltroMes').value);
+            const ano = parseInt(document.getElementById('selectFiltroAno').value);
+            
+            window.filtroMes = mes;
+            window.filtroAno = ano;
+            
+            // Lê o filtro de dia. 'all' ou o número do dia
+            const diaElement = document.getElementById('selectFiltroDia');
+            window.filtroDia = diaElement ? diaElement.value : 'all';
+
+            // 1. Repopula os dias (o mês/ano podem ter mudado) e garante a seleção correta
+            populateDayFilter(); 
+
+            // 2. Aplica o filtro principal
+            window.despesasFiltradas = window.despesas.filter(desp => {
+                // Para garantir que a comparação de data seja precisa no fuso local, vamos usar uma função
+                const dataDesp = new Date(desp.data + 'T00:00:00'); 
+                const matchMes = dataDesp.getMonth() === mes;
+                const matchAno = dataDesp.getFullYear() === ano;
+                
+                let matchDia = true;
+                // Se o filtro não for 'all', verifica o dia
+                if (window.filtroDia !== 'all') {
+                    const diaFiltrado = parseInt(window.filtroDia);
+                    matchDia = dataDesp.getDate() === diaFiltrado;
+                }
+
+                return matchMes && matchAno && matchDia;
+            });
+
+            // 3. Atualiza a interface
+            window.renderizarTabelaDespesas();
+            window.calcularResumo();
+            window.atualizarGraficos();
+        }
+
+        function saveData() {
+            try {
+                localStorage.setItem(DESPESAS_KEY, JSON.stringify(window.despesas));
+            } catch (e) {
+                console.error("Erro ao salvar dados no LocalStorage:", e);
+                window.showStatus('Erro ao salvar os dados no navegador.', 'bg-red-500');
+            }
+            
+            // Após salvar, re-aplica o filtro para atualizar a tela
+            applyFilter();
+        }
+        
+        window.showStatus = function(message, bgColor) {
+            const statusDiv = document.getElementById('status-message');
+            statusDiv.textContent = message;
+            statusDiv.classList.remove('hidden', 'bg-green-500', 'bg-red-500', 'opacity-0', 'translate-y-4');
+            statusDiv.classList.add(bgColor, 'opacity-100', 'translate-y-0', 'transition', 'ease-out', 'duration-300');
+            
+            setTimeout(() => {
+                statusDiv.classList.remove('opacity-100', 'translate-y-0');
+                statusDiv.classList.add('opacity-0', 'translate-y-4');
+                setTimeout(() => statusDiv.classList.add('hidden'), 300);
+            }, 3000);
+        }
+
+        // -----------------------------------------------------
+        // Funções de Despesas
+        // -----------------------------------------------------
+
+        window.adicionarDespesa = function() {
+            const valor = parseFloat(document.getElementById('despesaValor').value);
+            const categoria = document.getElementById('despesaCategoria').value;
+            const descricao = document.getElementById('despesaDescricao').value;
+            const formaPagamento = document.getElementById('despesaFormaPagamento').value;
+            // A data é pega do input de registro
+            const data = document.getElementById('despesaData').value; 
+
+            if (isNaN(valor) || valor <= 0 || !data || !categoria) {
+                window.showStatus('Preencha o valor, a data e a categoria corretamente!', 'bg-red-500');
+                return;
+            }
+            
+            const agora = new Date();
+            const horaRegistro = agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+            const novaDespesa = {
+                firestoreId: Date.now().toString(),
+                data: data,
+                horaRegistro: horaRegistro,
+                valor: parseFloat(valor.toFixed(2)),
+                categoria: categoria,
+                descricao: descricao,
+                formaPagamento: formaPagamento,
+                timestamp: new Date().toISOString()
+            };
+
+            window.despesas.push(novaDespesa);
+            saveData();
+
+            window.showStatus('Despesa adicionada com sucesso!', 'bg-green-500');
+            document.getElementById('despesaValor').value = '';
+            document.getElementById('despesaDescricao').value = '';
+            
+            // Garante que o input de registro volte (ou permaneça) na data atual
+            document.getElementById('despesaData').value = getTodayLocalISO();
+        }
+
+        window.removerDespesa = function(firestoreId) {
+            window.openConfirmModal(
+                'Confirmação Necessária',
+                'Tem certeza que deseja remover este registro de despesa? Esta ação não pode ser desfeita.',
+                () => {
+                    const index = window.despesas.findIndex(desp => desp.firestoreId === firestoreId);
+                    if (index !== -1) {
+                        window.despesas.splice(index, 1);
+                        saveData();
+                        window.showStatus('Registro de despesa removido com sucesso!', 'bg-green-500');
+                    } else {
+                        window.showStatus('Erro: Registro de despesa não encontrado.', 'bg-red-500');
+                    }
+                }
+            );
+        }
+        
+        window.renderizarTabelaDespesas = function() {
+            const tbody = document.getElementById('tabelaDespesas').querySelector('tbody');
+            tbody.innerHTML = ''; 
+            // Usa as despesas filtradas!
+            const despesasOrdenadas = [...window.despesasFiltradas].sort((a, b) => new Date(b.data) - new Date(a.data));
+
+            if (despesasOrdenadas.length === 0) {
+                 const tr = tbody.insertRow();
+                 tr.innerHTML = '<td colspan="7" class="px-6 py-4 text-center text-gray-500 italic">Nenhum registro de despesa encontrado para o filtro selecionado.</td>'; 
+                 return;
+            }
+
+            despesasOrdenadas.forEach(desp => {
+                const tr = tbody.insertRow();
+                tr.classList.add('hover:bg-gray-50');
+                
+                tr.insertCell().textContent = window.formatarData(desp.data);
+                tr.insertCell().textContent = desp.horaRegistro || '--:--';
+                tr.insertCell().textContent = desp.categoria;
+                tr.insertCell().textContent = desp.descricao || '-';
+                
+                const cellValor = tr.insertCell();
+                cellValor.textContent = `R$ ${desp.valor.toFixed(2).replace('.', ',')}`;
+                cellValor.classList.add('font-bold', 'text-expense-red'); 
+                
+                tr.insertCell().textContent = window.formatarFormaPagamento(desp.formaPagamento);
+
+                const cellAcao = tr.insertCell();
+                const btnRemover = document.createElement('button');
+                btnRemover.textContent = 'Remover';
+                btnRemover.classList.add('px-3', 'py-1', 'bg-red-500', 'text-white', 'rounded-md', 'hover:bg-red-600', 'text-sm');
+                btnRemover.onclick = () => window.removerDespesa(desp.firestoreId); 
+                cellAcao.appendChild(btnRemover);
+            });
+        }
+        
+        // -----------------------------------------------------
+        // Funções de Resumo e Cálculos
+        // -----------------------------------------------------
+
+        window.calcularResumo = function() {
+            let totalDespesas = 0; 
+            
+            // Usa as despesas filtradas!
+            window.despesasFiltradas.forEach(desp => {
+                totalDespesas += desp.valor;
+            });
+            
+            // SALVA O TOTAL GERAL NA VARIÁVEL GLOBAL
+            window.resumoDespesas.totalDespesas = totalDespesas; 
+            
+            // Formatador para Real Brasileiro
+            const formatter = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+            
+            // Monta o título do resumo baseado no filtro
+            let tituloResumo = `Resumo de Despesas - `;
+            
+            if (window.filtroDia !== 'all') {
+                 // Resumo diário
+                 const diaStr = parseInt(window.filtroDia) < 10 ? '0' + window.filtroDia : window.filtroDia;
+                 tituloResumo += `Dia ${diaStr} de ${nomesMeses[window.filtroMes]} / ${window.filtroAno}`;
+            } else {
+                 // Resumo mensal
+                 tituloResumo += `${nomesMeses[window.filtroMes]} / ${window.filtroAno} (Mensal)`;
+            }
+
+            // Atualiza Resumo Despesas
+            document.getElementById('total-despesas').textContent = formatter.format(totalDespesas);
+            
+            // Atualiza o título do resumo
+            document.getElementById('resumo-title').textContent = tituloResumo;
+        }
+
+        // --- Função de Modal Global ---
+        window.openConfirmModal = function(title, message, onConfirm) {
+            const modal = document.getElementById('confirm-modal');
+            const confirmBtn = document.getElementById('confirm-delete-btn');
+            const cancelBtn = document.getElementById('cancel-delete-btn');
+            
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-message').textContent = message;
+
+            modal.classList.remove('hidden');
+            
+            const handleConfirm = () => {
+                onConfirm();
+                modal.classList.add('hidden');
+                confirmBtn.removeEventListener('click', handleConfirm);
+                cancelBtn.removeEventListener('click', handleCancel);
+            };
+            
+            const handleCancel = () => {
+                modal.classList.add('hidden');
+                confirmBtn.removeEventListener('click', handleConfirm);
+                cancelBtn.removeEventListener('click', handleCancel);
+            };
+            
+            confirmBtn.addEventListener('click', handleConfirm);
+            cancelBtn.addEventListener('click', handleCancel);
+        }
+
+        // -----------------------------------------------------
+        // Funções de Gráfico
+        // -----------------------------------------------------
+        
+        window.atualizarGraficos = function() {
+            const dadosGraficoCategoria = {}; 
+
+            // Usa as despesas filtradas!
+            window.despesasFiltradas.forEach(desp => {
+                const categoria = desp.categoria;
+                dadosGraficoCategoria[categoria] = (dadosGraficoCategoria[categoria] || 0) + desp.valor;
+            });
+
+            // Cria arrays para o Chart.js
+            const labels = Object.keys(dadosGraficoCategoria);
+            const data = Object.values(dadosGraficoCategoria).map(v => v.toFixed(2));
+            
+            // Cores base
+            const baseColors = ['#ff6384', '#36a2eb', '#cc65fe', '#ffce56', '#4bc0c0', '#9966ff'];
+            const backgroundColors = labels.map((_, index) => baseColors[index % baseColors.length]);
+
+            // Monta o título do gráfico
+            let tituloGrafico = `Distribuição de Despesas por Categoria - `;
+            if (window.filtroDia !== 'all') {
+                 const diaStr = parseInt(window.filtroDia) < 10 ? '0' + window.filtroDia : window.filtroDia;
+                 tituloGrafico += `Dia ${diaStr} de ${nomesMeses[window.filtroMes]} / ${window.filtroAno}`;
+            } else {
+                 tituloGrafico += `${nomesMeses[window.filtroMes]} / ${window.filtroAno}`;
+            }
+
+
+            // --- GRÁFICO 1: DISTRIBUIÇÃO POR CATEGORIA ---
+            if (window.graficoDespesas) { window.graficoDespesas.destroy(); }
+            const ctxDespesas = document.getElementById('graficoDespesas').getContext('2d');
+            window.graficoDespesas = new Chart(ctxDespesas, {
+                type: 'pie',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Despesa Total (R$)',
+                        data: data,
+                        backgroundColor: backgroundColors
+                    }]
+                },
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'right', 
+                        },
+                        title: {
+                            display: true,
+                            text: tituloGrafico
+                        }
+                    }
+                } 
+            });
+        }
+
+
+        // -----------------------------------------------------
+        // Funções auxiliares de formatação e Limpeza
+        // -----------------------------------------------------
+        
+        // Formata a data de YYYY-MM-DD para DD/MM/YYYY
+        window.formatarData = function(dataISO) {
+            if (!dataISO) return '';
+            return dataISO.split('-').reverse().join('/');
+        }
+
+        window.formatarFormaPagamento = function(key) {
+            const map = {
+                'cartao': 'Cartão', 
+                'pix': 'PIX',
+                'dinheiro': 'Dinheiro'
+            };
+            return map[key] || key;
+        }
+        
+        window.limparDados = function() {
+            window.openConfirmModal(
+                'ATENÇÃO: Limpar Todos os Dados',
+                'Você está prestes a apagar **TODOS** os registros de Despesas salvos no seu navegador. Deseja realmente continuar?',
+                () => {
+                    if (window.despesas.length === 0) {
+                         window.showStatus('Não há dados para limpar.', 'bg-red-500');
+                         return;
+                    }
+                    
+                    window.despesas = [];
+                    saveData();
+                    
+                    window.showStatus('Todos os dados foram limpos com sucesso!', 'bg-green-500');
+                }
+            );
+        }
+
+        // -----------------------------------------------------
+        // Função de Exportação para Excel (Filtrada)
+        // -----------------------------------------------------
+        window.exportarParaExcel = function() {
+            const tabelaDiv = document.getElementById('tabelaDespesasDiv');
+            if (!tabelaDiv) {
+                window.showStatus('Erro: Tabela não encontrada para exportação.', 'bg-red-500');
+                return;
+            }
+            
+            // Usa as despesas filtradas!
+            if (window.despesasFiltradas.length === 0) {
+                 window.showStatus(`Não há dados de despesas para exportar para o filtro selecionado.`, 'bg-red-500');
+                 return;
+            }
+
+            // 1. Cria uma Tabela Temporária com os dados filtrados
+            const tabelaTemporaria = document.createElement('table');
+            tabelaTemporaria.classList.add('data-table');
+            
+            // Cria o cabeçalho (Copiado da tabela original, exceto Ação)
+            const theadHtml = `
+                <thead style="background-color: #f2f2f2;">
+                    <tr>
+                        <th style="padding: 8px; text-align: left;">DATA</th>
+                        <th style="padding: 8px; text-align: left;">HORA</th>
+                        <th style="padding: 8px; text-align: left;">CATEGORIA</th>
+                        <th style="padding: 8px; text-align: left;">DESCRIÇÃO</th>
+                        <th style="padding: 8px; text-align: right; color: #dc3545;">VALOR</th>
+                        <th style="padding: 8px; text-align: left;">PAGAMENTO</th>
+                    </tr>
+                </thead>
+            `;
+            tabelaTemporaria.innerHTML = theadHtml;
+            
+            // Cria o corpo da tabela com os dados FILTRADOS
+            const tbody = document.createElement('tbody');
+            window.despesasFiltradas.forEach(desp => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td style="padding: 8px;">${window.formatarData(desp.data)}</td>
+                    <td style="padding: 8px;">${desp.horaRegistro || '--:--'}</td>
+                    <td style="padding: 8px;">${desp.categoria}</td>
+                    <td style="padding: 8px;">${desp.descricao || '-'}</td>
+                    <td style="padding: 8px; text-align: right; font-weight: bold; color: #dc3545;">R$ ${desp.valor.toFixed(2).replace('.', ',')}</td>
+                    <td style="padding: 8px;">${window.formatarFormaPagamento(desp.formaPagamento)}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+            tabelaTemporaria.appendChild(tbody);
+
+            // 2. Cria a Tabela de Resumo para o Excel
+            const formatter = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+            
+            let nomeResumo = `${window.filtroDia !== 'all' ? 'Dia ' + window.filtroDia + ' de ' : ''}${nomesMeses[window.filtroMes]} / ${window.filtroAno}`;
+
+            const resumoHtml = `
+                <br><br><br>
+                <h3 style="font-size: 18px; font-weight: bold; color: #dc3545;">RESUMO GERAL DO PERÍODO (${nomeResumo})</h3>
+                <table border="1" style="border-collapse: collapse; width: 50%; min-width: 400px; font-family: Arial, sans-serif;">
+                    <thead>
+                        <tr style="background-color: #f2f2f2;">
+                            <th style="padding: 8px; text-align: left;">Descrição</th>
+                            <th style="padding: 8px; text-align: right;">Valor</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td style="padding: 8px; font-weight: bold;">Total Geral de Despesas</td>
+                            <td style="padding: 8px; text-align: right; color: #dc3545; font-weight: bold;">${formatter.format(window.resumoDespesas.totalDespesas)}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            `;
+
+            // 3. Constrói o Conteúdo Final
+            const uri = 'data:application/vnd.ms-excel;base64,';
+            const base64 = (s) => window.btoa(unescape(encodeURIComponent(s)));
+
+            const nomeArquivo = `Relatorio_Despesas_Eulalia_${window.filtroAno}_${window.filtroMes + 1}${window.filtroDia !== 'all' ? '_' + window.filtroDia : ''}.xls`;
+            
+            const template = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"></head><body>' +
+                             `<h2 style="font-size: 24px; color: #dc3545;">Relatório de Despesas - ${nomeResumo}</h2>` + 
+                             tabelaTemporaria.outerHTML + 
+                             resumoHtml + 
+                             '</body></html>';
+
+            // Cria um link temporário para forçar o download
+            const link = document.createElement('a');
+            link.href = uri + base64(template);
+            link.download = nomeArquivo;
+            
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            window.showStatus(`Dados de ${nomeResumo} exportados com sucesso!`, 'bg-green-500');
+        }
+
+        // -----------------------------------------------------
+        // Função de Scroll (Botão Voltar ao Topo)
+        // -----------------------------------------------------
+
+        window.scrollFunction = function() {
+            const backToTopBtn = document.getElementById("back-to-top");
+            if (document.body.scrollTop > 20 || document.documentElement.scrollTop > 20) {
+                backToTopBtn.style.display = "block";
+            } else {
+                backToTopBtn.style.display = "none";
+            }
+        }
+
+        window.topFunction = function() {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+
+        // -----------------------------------------------------
+        // Inicialização
+        // -----------------------------------------------------
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadData();
+            
+            // Anexa listeners
+            document.getElementById('btnAdicionarDespesa').addEventListener('click', window.adicionarDespesa);
+            
+            // Oculta a exibição de ID de usuário
+            document.getElementById('user-id-display').textContent = 'Salvo no seu navegador (Uso Local)';
+
+            // Adiciona listener para mostrar/esconder o botão Voltar ao Topo
+            window.onscroll = window.scrollFunction;
+        });
+
+    </script>
+</head>
+<body class="bg-bg-light p-4 md:p-8">
+
+
+ <!----------------------------------------------------------->
+    <style>
+        .container-central {
+    /* Garante que o container ocupe o espaço necessário para centralizar o botão */
+    text-align: center;
+    /* Adiciona um pouco de padding caso o botão seja muito grande */
+    padding: 20px;
+    }
+
+    /* --- Estilo do Botão (Tag 'a') --- */
+
+    .botao-voltar {
+        /* Transforma o link em um bloco para poder definir padding e largura */
+        display: inline-block;
+        /* Estilo e cores que remetem à arte e profissionalismo */
+        background-color: #007bff; /* Azul vibrante */
+        color: white; /* Texto branco */
+        padding: 12px 24px;
+        border-radius: 8px; /* Cantos levemente arredondados */
+        text-decoration: none; /* Remove o sublinhado padrão dos links */
+        font-size: 16px;
+        font-weight: bold;
+        /* Sombra sutil para dar profundidade, um toque artístico */
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        transition: background-color 0.3s, transform 0.2s; /* Transição suave para o hover */
+    }
+
+    /* Efeito ao passar o mouse (Hover) */
+    .botao-voltar:hover {
+        background-color: #0056b3; /* Um azul um pouco mais escuro */
+        transform: translateY(-2px); /* Eleva o botão sutilmente (Efeito 3D) */
+    }
+
+    /* Efeito ao clicar (Active) */
+    .botao-voltar:active {
+        background-color: #004085;
+        transform: translateY(0); /* Volta o botão para o lugar */
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+    </style>
+
+    <div class="container-central">
+        <a href="index.html" class="botao-voltar">
+            &#x2190; Voltar
+        </a>
+    </div>
+
+    <!----------------------------------------------------------->
+
+    <div id="confirm-modal" class="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50 hidden">
+        <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
+            <h3 id="modal-title" class="text-lg font-bold text-red-600 mb-4">Confirmação Necessária</h3>
+            <p id="modal-message" class="mb-6">Mensagem padrão...</p>
+            <div class="flex justify-end space-x-4">
+                <button id="cancel-delete-btn" class="px-4 py-2 bg-gray-300 text-gray-800 rounded-md hover:bg-gray-400">Cancelar</button>
+                <button id="confirm-delete-btn" class="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-700">Confirmar</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="status-message" class="fixed top-4 right-4 bg-green-500 text-white p-3 rounded-md shadow-lg hidden z-40 transition ease-out duration-300 transform translate-y-4 opacity-0">
+        Status...
+    </div>
+
+    <div class="max-w-7xl mx-auto bg-white p-6 md:p-10 rounded-xl shadow-2xl">
+        <div class="flex-shrink-0 mb-4 md:mb-0">
+            <img src="IMG_4146.PNG" alt="Logo da Clínica" class="h-161 w-auto object-contain mx-auto md:mx-0">
+        </div>
+
+        <header class="border-b pb-4 mb-6 flex flex-col md:flex-row items-start md:items-center justify-between"> 
+            <div>
+                <h1 class="text-2xl md:text-3xl font-extrabold text-expense-red">
+                    🔴 Controle de Saídas / Despesas <span class="text-gray-700">Dra. Eulália</span>
+                </h1>
+                <p id="user-id-display" class="text-xs text-gray-500 mt-1">
+                    Salvo no seu navegador (Uso Local)
+                </p>
+            </div>
+            
+            <div class="mt-4 md:mt-0 flex space-x-2">
+                <button onclick="window.exportarParaExcel()" class="px-4 py-2 bg-blue-500 text-white font-semibold text-sm rounded-lg shadow-md hover:bg-blue-700 whitespace-nowrap">
+                    <span class="hidden md:inline">Exportar Dados </span> para Excel 📊
+                </button>
+                <button onclick="window.limparDados()" class="px-4 py-2 bg-red-500 text-white font-semibold text-sm rounded-lg shadow-md hover:bg-red-700 whitespace-nowrap">
+                    Limpar Tudo
+                </button>
+            </div>
+        </header>
+        
+        <section class="mb-6 p-4 border border-gray-300 rounded-lg bg-gray-50 flex flex-col md:flex-row gap-4 items-center justify-center">
+            <h2 class="text-lg font-semibold text-primary-blue mr-4 whitespace-nowrap flex items-center">
+                <span class="text-2xl mr-2">📅</span> Filtrar por Período:
+            </h2>
+            <div class="flex gap-4 w-full md:w-auto items-center flex-wrap justify-center">
+                
+                <label for="selectFiltroDia" class="sr-only">Dia</label>
+                <select id="selectFiltroDia" class="p-2 border border-primary-blue rounded-lg bg-white focus:ring-primary-blue focus:border-primary-blue w-full md:w-auto font-semibold">
+                    </select>
+                
+                <label for="selectFiltroMes" class="sr-only">Mês</label>
+                <select id="selectFiltroMes" class="p-2 border border-primary-blue rounded-lg bg-white focus:ring-primary-blue focus:border-primary-blue w-full md:w-auto font-semibold">
+                    </select>
+                
+                <label for="selectFiltroAno" class="sr-only">Ano</label>
+                <select id="selectFiltroAno" class="p-2 border border-primary-blue rounded-lg bg-white focus:ring-primary-blue focus:border-primary-blue w-full md:w-auto font-semibold">
+                    </select>
+            </div>
+        </section>
+
+
+        <section class="mb-8 p-5 border border-red-200 rounded-lg bg-expense-light/50">
+            <h2 class="text-xl md:text-2xl font-semibold text-expense-red mb-4">Registrar Nova Despesa</h2>
+            <form id="formAdicionarDespesa" onsubmit="event.preventDefault(); window.adicionarDespesa();">
+                <div class="flex flex-col md:flex-row md:flex-wrap gap-4 items-end">
+                    
+                    <div class="flex flex-col w-full md:flex-1 md:min-w-[150px]">
+                        <label for="despesaValor" class="text-sm font-medium mb-1">Valor (R$)</label>
+                        <input type="number" id="despesaValor" step="0.01" min="0" required class="p-2 border border-gray-300 rounded-lg focus:ring-expense-red focus:border-expense-red">
+                    </div>
+                    
+                    <div class="flex flex-col w-full md:flex-1 md:min-w-[200px]">
+                        <label for="despesaCategoria" class="text-sm font-medium mb-1">Categoria</label>
+                        <select id="despesaCategoria" required class="p-2 border border-gray-300 rounded-lg focus:ring-expense-red focus:border-expense-red">
+                            <option value="Marketing">Marketing</option>
+                            <option value="Social Mídia">Social Mídia</option>
+                            <option value="Recursos/Equipamentos">Recursos / Equipamentos</option>
+                            <option value="Recursos Humanos">Recursos Humanos</option>
+                            <option value="Aluguel/Contas">Aluguel / Contas</option>
+                            <option value="Outros">Outros</option>
+                        </select>
+                    </div>
+                    
+                    <div class="flex flex-col w-full md:flex-1 md:min-w-[200px]">
+                        <label for="despesaDescricao" class="text-sm font-medium mb-1">Descrição</label>
+                        <input type="text" id="despesaDescricao" class="p-2 border border-gray-300 rounded-lg focus:ring-expense-red focus:border-expense-red" placeholder="Ex: Compra de luvas, Mensalidade Mkt">
+                    </div>
+
+                    <div class="flex flex-col w-full md:flex-1 md:min-w-[150px]">
+                        <label for="despesaFormaPagamento" class="text-sm font-medium mb-1">Forma de Pagamento</label>
+                        <select id="despesaFormaPagamento" required class="p-2 border border-gray-300 rounded-lg focus:ring-expense-red focus:border-expense-red">
+                            <option value="pix">PIX</option>
+                            <option value="cartao">Cartão</option>
+                            <option value="dinheiro">Dinheiro</option>
+                        </select>
+                    </div>
+                    
+                    <div class="flex flex-col w-full md:flex-1 md:min-w-[120px]">
+                        <label for="despesaData" class="text-sm font-medium mb-1">Data (Calendário)</label>
+                        <input type="date" id="despesaData" required class="p-2 border border-gray-300 rounded-lg focus:ring-expense-red focus:border-expense-red">
+                    </div>
+
+                    <button type="submit" id="btnAdicionarDespesa" class="w-full md:w-auto px-6 py-2 bg-expense-red text-white font-bold rounded-lg shadow-md hover:bg-red-700 self-center mt-2 md:mt-0">
+                        ➖ Adicionar Despesa
+                    </button>
+                </div>
+            </form>
+        </section>
+
+
+        <section class="mb-8">
+            <h2 id="resumo-title" class="text-xl md:text-2xl font-semibold text-primary-blue mb-4">Resumo de Despesas</h2>
+            
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+                
+                <div class="bg-red-100 p-5 rounded-xl shadow-lg border-l-4 border-expense-red col-span-1">
+                    <p class="text-sm text-gray-600">Total Geral de Despesas no Período</p>
+                    <strong id="total-despesas" class="text-3xl font-extrabold text-expense-red mt-1 block">R$ 0,00</strong>
+                </div>
+                
+                <div class="hidden lg:block col-span-2"></div> 
+            </div>
+
+            <div class="p-4 bg-gray-50 rounded-lg shadow-md h-96">
+                <div class="h-80 flex items-center justify-center"> 
+                    <canvas id="graficoDespesas" class="max-h-full max-w-full"></canvas>
+                </div>
+            </div>
+            
+        </section>
+
+        <section>
+            <h2 class="text-xl md:text-2xl font-semibold text-expense-red mb-4 border-t pt-4">Histórico de Despesas do Período</h2>
+            
+            <div id="tabelaDespesasDiv" class="overflow-x-auto w-full border border-red-200 rounded-lg shadow-lg">
+                <table id="tabelaDespesas" class="min-w-full divide-y divide-gray-200 data-table">
+                    <thead class="bg-red-50">
+                        <tr>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">DATA</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">HORA</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">CATEGORIA</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">DESCRIÇÃO</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-expense-red uppercase tracking-wider">VALOR</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">PAGAMENTO</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">AÇÃO</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                        </tbody>
+                </table>
+            </div>
+        </section>
+
+    </div>
+
+    <button onclick="window.topFunction()" id="back-to-top" title="Voltar ao Topo" 
+            class="p-3 bg-primary-blue text-white rounded-full shadow-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-primary-blue focus:ring-offset-2">
+        🔝
+    </button>
+
+</body>
+
+</html>
